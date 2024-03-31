@@ -7,7 +7,7 @@ namespace litter_robot_presence_detector {
 
 static const char *const TAG = "litter_robot_presence_detector";
 
-float LitterRobotPresenceDetector::get_setup_priority() const { return setup_priority::LATE; }
+float LitterRobotPresenceDetector::get_setup_priority() const { return setup_priority::AFTER_CONNECTION; }
 
 void LitterRobotPresenceDetector::on_shutdown() {
   this->inferring_ = false;
