@@ -1,6 +1,7 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.const import CONF_ID
+from esphome.components import esp32
 
 DEPENDENCIES = ["esp32_camera"]
 AUTO_LOAD = ["sensor"]
@@ -18,3 +19,12 @@ CONFIG_SCHEMA = cv.Schema(
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
+
+    esp32.add_idf_component(
+        name="esp-tflite-micro",
+        repo="https://github.com/espressif/esp-tflite-micro",
+    )
+
+    cg.add_build_flag("-DTF_LITE_STATIC_MEMORY")
+    cg.add_build_flag("-DTF_LITE_DISABLE_X86_NEON")
+    cg.add_build_flag("-DESP_NN")
