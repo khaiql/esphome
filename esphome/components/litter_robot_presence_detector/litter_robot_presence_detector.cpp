@@ -27,6 +27,7 @@ void LitterRobotPresenceDetector::setup() {
   this->semaphore_ = xSemaphoreCreateBinary();
 
   esp32_camera::global_esp32_camera->add_image_callback([this](std::shared_ptr<esp32_camera::CameraImage> image) {
+    ESP_LOGD(TAG, "received image");
     if (!this->inferring_ && image->was_requested_by(esp32_camera::API_REQUESTER)) {
       this->image_ = std::move(image);
       xSemaphoreGive(this->semaphore_);
@@ -47,7 +48,7 @@ void LitterRobotPresenceDetector::update() {
     return;
   }
 
-  esp32_camera::global_esp32_camera->request_image(esphome::esp32_camera::WEB_REQUESTER);
+  esp32_camera::global_esp32_camera->request_image(esphome::esp32_camera::API_REQUESTER);
   auto image = this->wait_for_image_();
 
   if (!image) {
