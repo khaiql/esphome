@@ -59,6 +59,13 @@ void LitterRobotPresenceDetector::update() {
   ESP_LOGI(TAG, "SNAPSHOT: acquired frame with size %d", image_size);
 }
 
+void LitterRobotPresenceDetector::dump_config() {
+  ESP_LOGCONFIG(TAG, "Litter Robot Presence Detector:");
+  if (this->is_failed()) {
+    ESP_LOGE(TAG, "  Setup Failed");
+  }
+}
+
 std::shared_ptr<esphome::esp32_camera::CameraImage> LitterRobotPresenceDetector::wait_for_image_() {
   std::shared_ptr<esphome::esp32_camera::CameraImage> image;
   image.swap(this->image_);
