@@ -1,6 +1,7 @@
 #pragma once
 
 #ifdef USE_ESP32
+#ifdef USE_ESP_IDF
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -36,4 +37,5 @@ class LitterRobotPresenceDetector : public PollingComponent, public sensor::Sens
 }  // namespace litter_robot_presence_detector
 }  // namespace esphome
 
+#endif
 #endif
