@@ -37,8 +37,8 @@ void LitterRobotPresenceDetector::setup() {
 }
 
 void LitterRobotPresenceDetector::update() {
-  if (this->is_failed()) {
-    ESP_LOGW(TAG, "the setup has failed, not doing anything");
+  if (!this->is_ready()) {
+    ESP_LOGW(TAG, "not ready yet, skip!");
     return;
   }
 
