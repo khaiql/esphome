@@ -20,10 +20,10 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
 
-    esp32.add_idf_component(
-        name="esp-tflite-micro",
-        repo="https://github.com/espressif/esp-tflite-micro",
-    )
+    # esp32.add_idf_component(
+    #     name="esp-tflite-micro",
+    #     repo="https://github.com/espressif/esp-tflite-micro",
+    # )
 
     cg.add_build_flag("-DTF_LITE_STATIC_MEMORY")
     cg.add_build_flag("-DTF_LITE_DISABLE_X86_NEON")
