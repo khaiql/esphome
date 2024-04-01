@@ -480,7 +480,6 @@ async def to_code(config):
         cg.add_platformio_option(
             "platform_packages", ["espressif/toolchain-esp32ulp@2.35.0-20220830"]
         )
-        add_idf_component("espressif/esp32-camera@2.0.4")
         add_idf_sdkconfig_option("CONFIG_PARTITION_TABLE_SINGLE_APP", False)
         add_idf_sdkconfig_option("CONFIG_PARTITION_TABLE_CUSTOM", True)
         add_idf_sdkconfig_option(
