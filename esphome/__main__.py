@@ -427,6 +427,12 @@ def command_compile(args, config):
     exit_code = write_cpp(config)
     if exit_code != 0:
         return exit_code
+
+    if CORE.using_esp_idf:
+        if os.path.islink(os.path.abspath(CORE.relative_build_path(""))+"/components"):
+            os.unlink(os.path.abspath(CORE.relative_build_path(""))+"/components")
+        os.symlink(".piolibdeps/"+CORE.name, os.path.abspath(CORE.relative_build_path(""))+"/components", True)
+
     if args.only_generate:
         _LOGGER.info("Successfully generated source code.")
         return 0
