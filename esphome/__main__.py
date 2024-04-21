@@ -429,9 +429,13 @@ def command_compile(args, config):
         return exit_code
 
     if CORE.using_esp_idf:
-        if os.path.islink(os.path.abspath(CORE.relative_build_path(""))+"/components"):
-            os.unlink(os.path.abspath(CORE.relative_build_path(""))+"/components")
-        os.symlink(".piolibdeps/"+CORE.name, os.path.abspath(CORE.relative_build_path(""))+"/components", True)
+        path = os.path.abspath(CORE.relative_build_path("")) + "/components"
+        link = path + "/esp32-camera"
+        if not os.path.exists(path):
+            os.makedirs(path)
+        if os.path.islink(link):
+            os.unlink(link)
+        os.symlink("../.piolibdeps/"+CORE.name+"/esp32-camera", link, True)
 
     if args.only_generate:
         _LOGGER.info("Successfully generated source code.")

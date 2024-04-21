@@ -8,7 +8,7 @@
 #include "esphome/core/component.h"
 #include "esphome/core/application.h"
 #include "esphome/components/esp32_camera/esp32_camera.h"
-#include "esphome/components/sensor/sensor.h"
+#include "esphome/components/binary_sensor/binary_sensor.h"
 
 #include <tensorflow/lite/core/c/common.h>
 #include <tensorflow/lite/micro/micro_interpreter.h>
@@ -20,10 +20,10 @@ namespace litter_robot_presence_detector {
 constexpr uint8_t PRESENCE = 1;
 constexpr uint8_t EMPTY = 0;
 
-class LitterRobotPresenceDetector : public PollingComponent, public sensor::Sensor {
+class LitterRobotPresenceDetector : public PollingComponent, public binary_sensor::BinarySensor {
  public:
   // constructor
-  LitterRobotPresenceDetector() : PollingComponent(10000) {}
+  LitterRobotPresenceDetector() : PollingComponent(7000) {}
 
   void on_shutdown() override;
   void setup() override;
@@ -37,14 +37,13 @@ class LitterRobotPresenceDetector : public PollingComponent, public sensor::Sens
   std::shared_ptr<esphome::esp32_camera::CameraImage> image_;
   uint8_t *tensor_arena_{nullptr};
   const tflite::Model *model{nullptr};
-  // tflite::MicroResourceVariables *mrv_{nullptr};
   tflite::MicroInterpreter *interpreter{nullptr};
   TfLiteTensor *input{nullptr};
   TfLiteTensor *output{nullptr};
 
   bool inferring_{false};
   bool setup_model();
-  bool register_preprocessor_ops(tflite::MicroMutableOpResolver<9> &micro_op_resolver);
+  bool register_preprocessor_ops(tflite::MicroMutableOpResolver<7> &micro_op_resolver);
   bool start_infer(std::shared_ptr<esphome::esp32_camera::CameraImage> image);
   bool is_cat_presence();
 };

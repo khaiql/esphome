@@ -62,4 +62,6 @@ switch:
     name: "Flashlight"
     pin: GPIO4
 
-litter_robot_presence_detector:
+binary_sensor:
+  - platform: litter_robot_presence_detector
+    name: "cat_detector_sensor"

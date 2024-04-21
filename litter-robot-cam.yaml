@@ -1,0 +1,83 @@
+esphome:
+  name: litter-robot-cam
+  friendly_name: litter-robot-cam
+  libraries:
+    - espressif/esp32-camera
+
+esp32:
+  board: esp32cam
+  framework:
+    type: esp-idf
+    version: recommended
+    # Custom sdkconfig options
+    sdkconfig_options:
+      COMPILER_OPTIMIZATION_SIZE: y
+    # Advanced tweaking options
+    advanced:
+      ignore_efuse_mac_crc: false
+
+# esp32_camera_web_server:
+#   - port: 8081
+#     mode: snapshot
+#   - port: 8080
+#     mode: stream
+
+# Enable logging
+logger:
+  level: VERBOSE
+  logs:
+    api: NONE
+    mdns: NONE
+    ota: NONE
+    wifi: NONE
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "7NdIqrbCkGTIDdzGGNgbAS4vfddfOi9m17Q9GrcMk+Q="
+
+ota:
+  password: "35f9cef260b4bf767d924f62e3a664f1"
+
+wifi:
+  ssid: chi-ngao
+  password: khongcopass
+
+  manual_ip:
+    static_ip: 192.168.31.192
+    gateway: 192.168.31.1
+    subnet: 255.255.255.0
+
+  use_address: 192.168.31.192
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Litter-Robot-Cam"
+    password: "jxxkykKcMKxw"
+
+esp32_camera:
+  name: Litter Robot camera
+  external_clock:
+    pin: GPIO0
+    frequency: 20MHz
+  i2c_pins:
+    sda: GPIO26
+    scl: GPIO27
+  data_pins: [GPIO5, GPIO18, GPIO19, GPIO21, GPIO36, GPIO39, GPIO34, GPIO35]
+  vsync_pin: GPIO25
+  href_pin: GPIO23
+  pixel_clock_pin: GPIO22
+  power_down_pin: GPIO32
+  resolution: 176x144
+  vertical_flip: true
+  agc_mode: auto
+  wb_mode: cloudy
+
+switch:
+  - platform: gpio
+    name: "Flashlight"
+    pin: GPIO4
+
+binary_sensor:
+  - platform: litter_robot_presence_detector
+    name: "cat_detector_sensor"

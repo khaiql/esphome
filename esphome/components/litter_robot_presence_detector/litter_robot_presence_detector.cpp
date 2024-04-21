@@ -12,7 +12,7 @@ namespace litter_robot_presence_detector {
 
 static const char *const TAG = "litter_robot_presence_detector";
 static const uint32_t MODEL_ARENA_SIZE = 300 * 1024;
-static const uint32_t QUANTIZED_THESHOLD = 74;  // Taken from the model
+static const double QUANTIZED_THESHOLD_FLOAT = 0.28578;  // Taken from the model
 
 float LitterRobotPresenceDetector::get_setup_priority() const { return setup_priority::AFTER_CONNECTION; }
 
@@ -23,7 +23,7 @@ void LitterRobotPresenceDetector::on_shutdown() {
   this->semaphore_ = nullptr;
 }
 
-bool LitterRobotPresenceDetector::register_preprocessor_ops(tflite::MicroMutableOpResolver<9> &micro_op_resolver) {
+bool LitterRobotPresenceDetector::register_preprocessor_ops(tflite::MicroMutableOpResolver<7> &micro_op_resolver) {
   if (micro_op_resolver.AddConv2D() != kTfLiteOk) {
     ESP_LOGE(TAG, "failed to register ops AddConv2D");
     return false;
@@ -44,23 +44,8 @@ bool LitterRobotPresenceDetector::register_preprocessor_ops(tflite::MicroMutable
     return false;
   }
 
-  if (micro_op_resolver.AddAveragePool2D() != kTfLiteOk) {
-    ESP_LOGE(TAG, "failed to register ops AddAveragePool2D");
-    return false;
-  }
-
-  if (micro_op_resolver.AddSoftmax() != kTfLiteOk) {
-    ESP_LOGE(TAG, "failed to register ops AddSoftmax");
-    return false;
-  }
-
   if (micro_op_resolver.AddFullyConnected() != kTfLiteOk) {
     ESP_LOGE(TAG, "failed to register ops AddFullyConnected");
-    return false;
-  }
-
-  if (micro_op_resolver.AddDequantize() != kTfLiteOk) {
-    ESP_LOGE(TAG, "failed to register ops AddDequantize");
     return false;
   }
 
@@ -69,10 +54,13 @@ bool LitterRobotPresenceDetector::register_preprocessor_ops(tflite::MicroMutable
     return false;
   }
 
+  if (micro_op_resolver.AddLogistic() != kTfLiteOk) {
+    ESP_LOGE(TAG, "failed to register ops AddLogistic");
+    return false;
+  }
+
   return true;
 }
-
-// uint8_t tensor_arena[tensor_arena_size];
 
 bool LitterRobotPresenceDetector::setup_model() {
   ExternalRAMAllocator<uint8_t> arena_allocator(ExternalRAMAllocator<uint8_t>::ALLOW_FAILURE);
@@ -91,14 +79,11 @@ bool LitterRobotPresenceDetector::setup_model() {
     return false;
   }
 
-  static tflite::MicroMutableOpResolver<9> micro_op_resolver;
+  static tflite::MicroMutableOpResolver<7> micro_op_resolver;
   if (!this->register_preprocessor_ops(micro_op_resolver)) {
     ESP_LOGE(TAG, "Register ops failed");
     return false;
   }
-
-  // tflite::MicroAllocator *ma = tflite::MicroAllocator::Create(this->tensor_arena_, MODEL_ARENA_SIZE);
-  // this->mrv_ = tflite::MicroResourceVariables::Create(ma, 15);
 
   static tflite::MicroInterpreter static_interpreter(this->model, micro_op_resolver, this->tensor_arena_,
                                                      MODEL_ARENA_SIZE);
@@ -170,7 +155,9 @@ void LitterRobotPresenceDetector::update() {
   if (!this->start_infer(image)) {
     ESP_LOGE(TAG, "infer failed");
   } else {
-    ESP_LOGI(TAG, "cat detected: %s", this->is_cat_presence() ? "yes" : "no");
+    auto presence = this->is_cat_presence();
+    this->publish_state(presence);
+    ESP_LOGI(TAG, "cat detected: %s", presence ? "yes" : "no");
   }
   this->inferring_ = false;
 }
@@ -180,12 +167,16 @@ void LitterRobotPresenceDetector::dump_config() {
     ESP_LOGE(TAG, "  Setup Failed");
     return;
   }
-  ESP_LOGCONFIG(TAG, "Litter Robot Presence Detector:");
-  ESP_LOGCONFIG(TAG, "  - input_dim_size: %d", input->dims->size);
-  ESP_LOGCONFIG(TAG, "  - input_dim (%d,%d,%d,%d)", input->dims->data[0], input->dims->data[1], input->dims->data[2],
+  ESP_LOGCONFIG(TAG, "Input");
+  ESP_LOGCONFIG(TAG, "  - dim_size: %d", input->dims->size);
+  ESP_LOGCONFIG(TAG, "  - input_dims (%d,%d,%d,%d)", input->dims->data[0], input->dims->data[1], input->dims->data[2],
                 input->dims->data[3]);
-  ESP_LOGCONFIG(TAG, "  - output_dim_size: %d", output->dims->size);
+  ESP_LOGCONFIG(TAG, "  - zero_point=%d scale=%f", input->params.zero_point, input->params.scale);
   ESP_LOGCONFIG(TAG, "  - input_type: %d", input->type);
+  ESP_LOGCONFIG(TAG, "Output");
+  ESP_LOGCONFIG(TAG, "  - dim_size: %d", output->dims->size);
+  ESP_LOGCONFIG(TAG, "  - dims (%d,%d)", output->dims->data[0], output->dims->data[1]);
+  ESP_LOGCONFIG(TAG, "  - zero_point=%d scale=%f", output->params.zero_point, output->params.scale);
   ESP_LOGCONFIG(TAG, "  - output_type: %d", output->type);
 }
 
@@ -205,8 +196,6 @@ std::shared_ptr<esphome::esp32_camera::CameraImage> LitterRobotPresenceDetector:
 bool LitterRobotPresenceDetector::start_infer(std::shared_ptr<esphome::esp32_camera::CameraImage> image) {
   camera_fb_t *rb = image->get_raw_buffer();
   size_t len = image->get_data_length();
-  ESP_LOGD(TAG, "img width %d", rb->width);
-  ESP_LOGD(TAG, "img height %d", rb->height);
   memcpy(this->input->data.uint8, rb->buf, image->get_data_length());
   if (kTfLiteOk != this->interpreter->Invoke()) {
     ESP_LOGE(TAG, "Invoke failed");
@@ -218,9 +207,9 @@ bool LitterRobotPresenceDetector::start_infer(std::shared_ptr<esphome::esp32_cam
 bool LitterRobotPresenceDetector::is_cat_presence() {
   output = this->output;
   auto score = output->data.uint8[0];
-  ESP_LOGD(TAG, "infer score %d", score);
   float score_f = (score - output->params.zero_point) * output->params.scale;
-  return score_f > QUANTIZED_THESHOLD;
+  ESP_LOGD(TAG, "infer score %d, float=%f", score, score_f);
+  return score_f >= QUANTIZED_THESHOLD_FLOAT;
 }
 }  // namespace litter_robot_presence_detector
 }  // namespace esphome
