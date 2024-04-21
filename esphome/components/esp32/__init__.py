@@ -471,7 +471,6 @@ async def to_code(config):
         cg.add_build_flag("-DUSE_ESP_IDF")
         cg.add_build_flag("-DUSE_ESP32_FRAMEWORK_ESP_IDF")
         cg.add_build_flag("-Wno-nonnull-compare")
-        cg.add_build_flag("-DCONFIG_SCCB_CLK_FREQ")
         cg.add_platformio_option(
             "platform_packages",
             [f"platformio/framework-espidf@{conf[CONF_SOURCE]}"],

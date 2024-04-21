@@ -1,0 +1,65 @@
+esphome:
+  name: espcam-2
+  libraries:
+    - espressif/esp32-camera
+
+esp32:
+  board: esp32cam
+  framework:
+    type: esp-idf
+    version: recommended
+    # Custom sdkconfig options
+    sdkconfig_options:
+      COMPILER_OPTIMIZATION_SIZE: y
+    # Advanced tweaking options
+    advanced:
+      ignore_efuse_mac_crc: false
+
+# esp32_camera_web_server:
+#   - port: 8081
+#     mode: snapshot
+#   - port: 8080
+#     mode: stream
+
+# Enable logging
+logger:
+  level: VERBOSE
+  logs:
+    api: NONE
+    mdns: NONE
+    ota: NONE
+    wifi: NONE
+
+# Enable Home Assistant API
+api:
+
+ota:
+
+wifi:
+  ssid: chi-ngao
+  password: khongcopass
+
+esp32_camera:
+  name: ESPCAM 2
+  external_clock:
+    pin: GPIO0
+    frequency: 20MHz
+  i2c_pins:
+    sda: GPIO26
+    scl: GPIO27
+  data_pins: [GPIO5, GPIO18, GPIO19, GPIO21, GPIO36, GPIO39, GPIO34, GPIO35]
+  vsync_pin: GPIO25
+  href_pin: GPIO23
+  pixel_clock_pin: GPIO22
+  power_down_pin: GPIO32
+  resolution: 176x144
+  vertical_flip: true
+  agc_mode: auto
+  wb_mode: cloudy
+
+switch:
+  - platform: gpio
+    name: "Flashlight"
+    pin: GPIO4
+
+litter_robot_presence_detector:

@@ -2,10 +2,17 @@
 #include "litter_robot_presence_detector.h"
 #include "esphome/core/log.h"
 
+#include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
+#include "tensorflow/lite/micro/micro_interpreter.h"
+#include "tensorflow/lite/schema/schema_generated.h"
+#include "person_detect_model_data.h"
+
 namespace esphome {
 namespace litter_robot_presence_detector {
 
 static const char *const TAG = "litter_robot_presence_detector";
+static const uint32_t MODEL_ARENA_SIZE = 300 * 1024;
+static const uint32_t QUANTIZED_THESHOLD = 74;  // Taken from the model
 
 float LitterRobotPresenceDetector::get_setup_priority() const { return setup_priority::AFTER_CONNECTION; }
 
@@ -16,8 +23,111 @@ void LitterRobotPresenceDetector::on_shutdown() {
   this->semaphore_ = nullptr;
 }
 
+bool LitterRobotPresenceDetector::register_preprocessor_ops(tflite::MicroMutableOpResolver<9> &micro_op_resolver) {
+  if (micro_op_resolver.AddConv2D() != kTfLiteOk) {
+    ESP_LOGE(TAG, "failed to register ops AddConv2D");
+    return false;
+  }
+
+  if (micro_op_resolver.AddMaxPool2D() != kTfLiteOk) {
+    ESP_LOGE(TAG, "failed to register ops AddMaxPool2D");
+    return false;
+  }
+
+  if (micro_op_resolver.AddQuantize() != kTfLiteOk) {
+    ESP_LOGE(TAG, "failed to register ops AddQuantize");
+    return false;
+  }
+
+  if (micro_op_resolver.AddDepthwiseConv2D() != kTfLiteOk) {
+    ESP_LOGE(TAG, "failed to register ops AddDepthwiseConv2D");
+    return false;
+  }
+
+  if (micro_op_resolver.AddAveragePool2D() != kTfLiteOk) {
+    ESP_LOGE(TAG, "failed to register ops AddAveragePool2D");
+    return false;
+  }
+
+  if (micro_op_resolver.AddSoftmax() != kTfLiteOk) {
+    ESP_LOGE(TAG, "failed to register ops AddSoftmax");
+    return false;
+  }
+
+  if (micro_op_resolver.AddFullyConnected() != kTfLiteOk) {
+    ESP_LOGE(TAG, "failed to register ops AddFullyConnected");
+    return false;
+  }
+
+  if (micro_op_resolver.AddDequantize() != kTfLiteOk) {
+    ESP_LOGE(TAG, "failed to register ops AddDequantize");
+    return false;
+  }
+
+  if (micro_op_resolver.AddMean() != kTfLiteOk) {
+    ESP_LOGE(TAG, "failed to register ops AddMean");
+    return false;
+  }
+
+  return true;
+}
+
+// uint8_t tensor_arena[tensor_arena_size];
+
+bool LitterRobotPresenceDetector::setup_model() {
+  ExternalRAMAllocator<uint8_t> arena_allocator(ExternalRAMAllocator<uint8_t>::ALLOW_FAILURE);
+  this->tensor_arena_ = arena_allocator.allocate(MODEL_ARENA_SIZE);
+  if (this->tensor_arena_ == nullptr) {
+    ESP_LOGE(TAG, "Could not allocate the streaming model's tensor arena.");
+    return false;
+  }
+
+  this->model = ::tflite::GetModel(g_person_detect_model_data);
+  if (this->model->version() != TFLITE_SCHEMA_VERSION) {
+    ESP_LOGE(TAG,
+             "Model provided is schema version %d not equal "
+             "to supported version %d.\n",
+             model->version(), TFLITE_SCHEMA_VERSION);
+    return false;
+  }
+
+  static tflite::MicroMutableOpResolver<9> micro_op_resolver;
+  if (!this->register_preprocessor_ops(micro_op_resolver)) {
+    ESP_LOGE(TAG, "Register ops failed");
+    return false;
+  }
+
+  // tflite::MicroAllocator *ma = tflite::MicroAllocator::Create(this->tensor_arena_, MODEL_ARENA_SIZE);
+  // this->mrv_ = tflite::MicroResourceVariables::Create(ma, 15);
+
+  static tflite::MicroInterpreter static_interpreter(this->model, micro_op_resolver, this->tensor_arena_,
+                                                     MODEL_ARENA_SIZE);
+  this->interpreter = &static_interpreter;
+
+  TfLiteStatus allocate_status = interpreter->AllocateTensors();
+  if (allocate_status != kTfLiteOk) {
+    ESP_LOGE(TAG, "AllocateTensors() failed");
+    return false;
+  }
+
+  ESP_LOGD(TAG, "setup model successfully");
+
+  // Get information about the memory area to use for the model's input.
+  this->input = this->interpreter->input(0);
+  this->output = this->interpreter->output(0);
+  return true;
+}
+
 void LitterRobotPresenceDetector::setup() {
   ESP_LOGD(TAG, "Begin setup");
+
+  if (!this->setup_model()) {
+    ESP_LOGE(TAG, "setup model failed");
+    this->mark_failed();
+    return;
+  }
+
+  // SETUP CAMERA
   if (!esp32_camera::global_esp32_camera || esp32_camera::global_esp32_camera->is_failed()) {
     ESP_LOGW(TAG, "setup litter robot presence detector failed");
     this->mark_failed();
@@ -30,7 +140,7 @@ void LitterRobotPresenceDetector::setup() {
     ESP_LOGD(TAG, "received image");
     if (!this->inferring_ && image->was_requested_by(esp32_camera::API_REQUESTER)) {
       this->image_ = std::move(image);
-      xSemaphoreGive(this->semaphore_);
+      // xSemaphoreGive(this->semaphore_);
     }
   });
 
@@ -56,28 +166,61 @@ void LitterRobotPresenceDetector::update() {
     return;
   }
 
-  size_t image_size = image->get_data_length();
-  ESP_LOGI(TAG, "SNAPSHOT: acquired frame with size %d", image_size);
+  this->inferring_ = true;
+  if (!this->start_infer(image)) {
+    ESP_LOGE(TAG, "infer failed");
+  } else {
+    ESP_LOGI(TAG, "cat detected: %s", this->is_cat_presence() ? "yes" : "no");
+  }
+  this->inferring_ = false;
 }
 
 void LitterRobotPresenceDetector::dump_config() {
-  ESP_LOGCONFIG(TAG, "Litter Robot Presence Detector:");
   if (this->is_failed()) {
     ESP_LOGE(TAG, "  Setup Failed");
+    return;
   }
+  ESP_LOGCONFIG(TAG, "Litter Robot Presence Detector:");
+  ESP_LOGCONFIG(TAG, "  - input_dim_size: %d", input->dims->size);
+  ESP_LOGCONFIG(TAG, "  - input_dim (%d,%d,%d,%d)", input->dims->data[0], input->dims->data[1], input->dims->data[2],
+                input->dims->data[3]);
+  ESP_LOGCONFIG(TAG, "  - output_dim_size: %d", output->dims->size);
+  ESP_LOGCONFIG(TAG, "  - input_type: %d", input->type);
+  ESP_LOGCONFIG(TAG, "  - output_type: %d", output->type);
 }
 
 std::shared_ptr<esphome::esp32_camera::CameraImage> LitterRobotPresenceDetector::wait_for_image_() {
   std::shared_ptr<esphome::esp32_camera::CameraImage> image;
   image.swap(this->image_);
 
-  if (!image) {
-    // retry as we might still be fetching image
-    xSemaphoreTake(this->semaphore_, 2000);
-    image.swap(this->image_);
-  }
+  // if (!image) {
+  //   // retry as we might still be fetching image
+  //   xSemaphoreTake(this->semaphore_, 20000);
+  //   image.swap(this->image_);
+  // }
 
   return image;
+}
+
+bool LitterRobotPresenceDetector::start_infer(std::shared_ptr<esphome::esp32_camera::CameraImage> image) {
+  camera_fb_t *rb = image->get_raw_buffer();
+  size_t len = image->get_data_length();
+  ESP_LOGD(TAG, "img width %d", rb->width);
+  ESP_LOGD(TAG, "img height %d", rb->height);
+  memcpy(this->input->data.uint8, rb->buf, image->get_data_length());
+  if (kTfLiteOk != this->interpreter->Invoke()) {
+    ESP_LOGE(TAG, "Invoke failed");
+    return false;
+  }
+  return true;
+}
+
+bool LitterRobotPresenceDetector::is_cat_presence() {
+  output = this->output;
+  auto score = output->data.uint8[0];
+  ESP_LOGD(TAG, "infer score %d", score);
+  float score_f = (score - output->params.zero_point) * output->params.scale;
+  return score_f > QUANTIZED_THESHOLD;
 }
 }  // namespace litter_robot_presence_detector
 }  // namespace esphome
