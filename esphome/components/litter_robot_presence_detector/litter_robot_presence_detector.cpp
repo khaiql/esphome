@@ -6,31 +6,26 @@
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 #include "person_detect_model_data.h"
+#include "img_converters.h"
+#include <time.h>
 
 namespace esphome {
 namespace litter_robot_presence_detector {
 
 static const char *const TAG = "litter_robot_presence_detector";
 static const uint32_t MODEL_ARENA_SIZE = 300 * 1024;
-static const double QUANTIZED_THESHOLD_FLOAT = 0.28578;  // Taken from the model
 
 float LitterRobotPresenceDetector::get_setup_priority() const { return setup_priority::AFTER_CONNECTION; }
 
 void LitterRobotPresenceDetector::on_shutdown() {
-  this->inferring_ = false;
   this->image_ = nullptr;
   vSemaphoreDelete(this->semaphore_);
   this->semaphore_ = nullptr;
 }
 
-bool LitterRobotPresenceDetector::register_preprocessor_ops(tflite::MicroMutableOpResolver<7> &micro_op_resolver) {
+bool LitterRobotPresenceDetector::register_preprocessor_ops(tflite::MicroMutableOpResolver<8> &micro_op_resolver) {
   if (micro_op_resolver.AddConv2D() != kTfLiteOk) {
     ESP_LOGE(TAG, "failed to register ops AddConv2D");
-    return false;
-  }
-
-  if (micro_op_resolver.AddMaxPool2D() != kTfLiteOk) {
-    ESP_LOGE(TAG, "failed to register ops AddMaxPool2D");
     return false;
   }
 
@@ -39,8 +34,13 @@ bool LitterRobotPresenceDetector::register_preprocessor_ops(tflite::MicroMutable
     return false;
   }
 
-  if (micro_op_resolver.AddDepthwiseConv2D() != kTfLiteOk) {
-    ESP_LOGE(TAG, "failed to register ops AddDepthwiseConv2D");
+  if (micro_op_resolver.AddLeakyRelu() != kTfLiteOk) {
+    ESP_LOGE(TAG, "failed to register ops AddLeakyRelu");
+    return false;
+  }
+
+  if (micro_op_resolver.AddMaxPool2D() != kTfLiteOk) {
+    ESP_LOGE(TAG, "failed to register ops AddMaxPool2D");
     return false;
   }
 
@@ -49,13 +49,18 @@ bool LitterRobotPresenceDetector::register_preprocessor_ops(tflite::MicroMutable
     return false;
   }
 
-  if (micro_op_resolver.AddMean() != kTfLiteOk) {
-    ESP_LOGE(TAG, "failed to register ops AddMean");
+  if (micro_op_resolver.AddReshape() != kTfLiteOk) {
+    ESP_LOGE(TAG, "failed to register ops AddReshape");
     return false;
   }
 
-  if (micro_op_resolver.AddLogistic() != kTfLiteOk) {
-    ESP_LOGE(TAG, "failed to register ops AddLogistic");
+  if (micro_op_resolver.AddSoftmax() != kTfLiteOk) {
+    ESP_LOGE(TAG, "failed to register ops AddSoftmax");
+    return false;
+  }
+
+  if (micro_op_resolver.AddMean() != kTfLiteOk) {
+    ESP_LOGE(TAG, "failed to register ops AddMean");
     return false;
   }
 
@@ -79,7 +84,7 @@ bool LitterRobotPresenceDetector::setup_model() {
     return false;
   }
 
-  static tflite::MicroMutableOpResolver<7> micro_op_resolver;
+  static tflite::MicroMutableOpResolver<8> micro_op_resolver;
   if (!this->register_preprocessor_ops(micro_op_resolver)) {
     ESP_LOGE(TAG, "Register ops failed");
     return false;
@@ -97,20 +102,11 @@ bool LitterRobotPresenceDetector::setup_model() {
 
   ESP_LOGD(TAG, "setup model successfully");
 
-  // Get information about the memory area to use for the model's input.
-  this->input = this->interpreter->input(0);
-  this->output = this->interpreter->output(0);
   return true;
 }
 
 void LitterRobotPresenceDetector::setup() {
   ESP_LOGD(TAG, "Begin setup");
-
-  if (!this->setup_model()) {
-    ESP_LOGE(TAG, "setup model failed");
-    this->mark_failed();
-    return;
-  }
 
   // SETUP CAMERA
   if (!esp32_camera::global_esp32_camera || esp32_camera::global_esp32_camera->is_failed()) {
@@ -119,27 +115,28 @@ void LitterRobotPresenceDetector::setup() {
     return;
   }
 
+  if (!this->setup_model()) {
+    ESP_LOGE(TAG, "setup model failed");
+    this->mark_failed();
+    return;
+  }
+
   this->semaphore_ = xSemaphoreCreateBinary();
 
   esp32_camera::global_esp32_camera->add_image_callback([this](std::shared_ptr<esp32_camera::CameraImage> image) {
     ESP_LOGD(TAG, "received image");
-    if (!this->inferring_ && image->was_requested_by(esp32_camera::API_REQUESTER)) {
+    if (image->was_requested_by(esp32_camera::API_REQUESTER)) {
       this->image_ = std::move(image);
-      // xSemaphoreGive(this->semaphore_);
+      xSemaphoreGive(this->semaphore_);
     }
   });
 
   ESP_LOGD(TAG, "setup litter robot presence detector successfully");
 }
 
-void LitterRobotPresenceDetector::update() {
+void LitterRobotPresenceDetector::loop() {
   if (!this->is_ready()) {
     ESP_LOGW(TAG, "not ready yet, skip!");
-    return;
-  }
-
-  if (this->inferring_) {
-    ESP_LOGI(TAG, "litter robot presence detector is inferring, skip!");
     return;
   }
 
@@ -150,16 +147,26 @@ void LitterRobotPresenceDetector::update() {
     ESP_LOGW(TAG, "SNAPSHOT: failed to acquire frame");
     return;
   }
+  this->image_ = nullptr;
 
-  this->inferring_ = true;
+#ifdef DEBUG_CAMERA_IMAGE
+  md5::MD5Digest md5{};
+  md5.init();  // reset the md5 to compute hash of the picture
+  md5.add(image->get_data_buffer(), image->get_data_length());
+  md5.calculate();
+  char *img_hex = new char[512];
+  md5.get_hex(img_hex);
+  ESP_LOGD(TAG, "image hex %s", img_hex);
+  delete[] img_hex;
+#endif
+
   if (!this->start_infer(image)) {
     ESP_LOGE(TAG, "infer failed");
   } else {
-    auto presence = this->is_cat_presence();
-    this->publish_state(presence);
-    ESP_LOGI(TAG, "cat detected: %s", presence ? "yes" : "no");
+    auto prediction = this->get_prediction_class();
+    ESP_LOGI(TAG, "predicted class %s", prediction.c_str());
+    this->publish_state(prediction == CLASSES[CAT_DETECTED_INDEX]);
   }
-  this->inferring_ = false;
 }
 
 void LitterRobotPresenceDetector::dump_config() {
@@ -167,6 +174,9 @@ void LitterRobotPresenceDetector::dump_config() {
     ESP_LOGE(TAG, "  Setup Failed");
     return;
   }
+  TfLiteTensor *input = this->interpreter->input(0);
+  TfLiteTensor *output = this->interpreter->output(0);
+
   ESP_LOGCONFIG(TAG, "Input");
   ESP_LOGCONFIG(TAG, "  - dim_size: %d", input->dims->size);
   ESP_LOGCONFIG(TAG, "  - input_dims (%d,%d,%d,%d)", input->dims->data[0], input->dims->data[1], input->dims->data[2],
@@ -184,32 +194,48 @@ std::shared_ptr<esphome::esp32_camera::CameraImage> LitterRobotPresenceDetector:
   std::shared_ptr<esphome::esp32_camera::CameraImage> image;
   image.swap(this->image_);
 
-  // if (!image) {
-  //   // retry as we might still be fetching image
-  //   xSemaphoreTake(this->semaphore_, 20000);
-  //   image.swap(this->image_);
-  // }
+  if (!image) {
+    // retry as we might still be fetching image
+    xSemaphoreTake(this->semaphore_, 100);
+    image.swap(this->image_);
+  }
 
   return image;
 }
-
 bool LitterRobotPresenceDetector::start_infer(std::shared_ptr<esphome::esp32_camera::CameraImage> image) {
   camera_fb_t *rb = image->get_raw_buffer();
-  size_t len = image->get_data_length();
-  memcpy(this->input->data.uint8, rb->buf, image->get_data_length());
-  if (kTfLiteOk != this->interpreter->Invoke()) {
-    ESP_LOGE(TAG, "Invoke failed");
+
+  TfLiteTensor *input = this->interpreter->input(0);
+  size_t bytes_to_copy = input->bytes;
+  uint32_t prior_invoke = millis();
+  ESP_LOGD(TAG, "img width=%d height=%d len=%d", rb->width, rb->height, rb->len);
+  uint8_t *rgb_out = new uint8_t[bytes_to_copy];
+  if (!jpg2rgb565(rb->buf, rb->len, rgb_out, JPG_SCALE_NONE)) {
+    ESP_LOGE(TAG, "cant decode to rgb");
     return false;
   }
-  return true;
+
+  memcpy(input->data.uint8, rgb_out, bytes_to_copy);
+  TfLiteStatus invokeStatus = this->interpreter->Invoke();
+  ESP_LOGD(TAG, " Inference Latency=%u ms", (millis() - prior_invoke));
+  delete rgb_out;
+  return invokeStatus == kTfLiteOk;
 }
 
-bool LitterRobotPresenceDetector::is_cat_presence() {
-  output = this->output;
-  auto score = output->data.uint8[0];
-  float score_f = (score - output->params.zero_point) * output->params.scale;
-  ESP_LOGD(TAG, "infer score %d, float=%f", score, score_f);
-  return score_f >= QUANTIZED_THESHOLD_FLOAT;
+void LitterRobotPresenceDetector::update_sensor_state(bool cat_detected) {}
+
+std::string LitterRobotPresenceDetector::get_prediction_class() {
+  TfLiteTensor *output = this->interpreter->output(0);
+
+  auto empty_score = output->data.uint8[0];
+  auto cat_detected_score = output->data.uint8[1];
+  ESP_LOGD(TAG, "empty score=%d cat_detected score=%d", empty_score, cat_detected_score);
+
+  if (cat_detected_score > empty_score) {
+    return CLASSES[CAT_DETECTED_INDEX];
+  }
+
+  return CLASSES[EMPTY_INDEX];
 }
 }  // namespace litter_robot_presence_detector
 }  // namespace esphome
