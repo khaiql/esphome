@@ -6,14 +6,20 @@
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 #include "person_detect_model_data.h"
-#include "img_converters.h"
 #include <time.h>
+
+#ifdef USE_IMG_CONVERTERS
+#include "img_converters.h"
+#else
+#include "jpeg_decoder.h"
+#endif
 
 namespace esphome {
 namespace litter_robot_presence_detector {
 
 static const char *const TAG = "litter_robot_presence_detector";
-static const uint32_t MODEL_ARENA_SIZE = 300 * 1024;
+static const uint32_t MODEL_ARENA_SIZE = 400 * 1024;
+static const uint32_t INPUT_BUFFER_SIZE = 144 * 176 * 3 * sizeof(uint8_t);
 
 float LitterRobotPresenceDetector::get_setup_priority() const { return setup_priority::AFTER_CONNECTION; }
 
@@ -23,7 +29,7 @@ void LitterRobotPresenceDetector::on_shutdown() {
   this->semaphore_ = nullptr;
 }
 
-bool LitterRobotPresenceDetector::register_preprocessor_ops(tflite::MicroMutableOpResolver<8> &micro_op_resolver) {
+bool LitterRobotPresenceDetector::register_preprocessor_ops(tflite::MicroMutableOpResolver<9> &micro_op_resolver) {
   if (micro_op_resolver.AddConv2D() != kTfLiteOk) {
     ESP_LOGE(TAG, "failed to register ops AddConv2D");
     return false;
@@ -64,6 +70,42 @@ bool LitterRobotPresenceDetector::register_preprocessor_ops(tflite::MicroMutable
     return false;
   }
 
+  if (micro_op_resolver.AddDepthwiseConv2D() != kTfLiteOk) {
+    ESP_LOGE(TAG, "failed to register ops AddDepthwiseConv2D");
+    return false;
+  }
+
+  return true;
+}
+
+bool LitterRobotPresenceDetector::decode_jpg(camera_fb_t *rb) {
+#ifdef USE_IMG_CONVERTERS
+  if (!fmt2rgb888(rb->buf, rb->len, PIXFORMAT_RGB888, this->input_buffer)) {
+    ESP_LOGE(TAG, "cant decode to rgb");
+    return false;
+  }
+
+  ESP_LOGD(TAG, "decoded to jpg");
+#else
+  esp_jpeg_image_cfg_t jpeg_cfg = {.indata = (uint8_t *) rb->buf,
+                                   .indata_size = rb->len,
+                                   .outbuf = this->input_buffer,
+                                   .outbuf_size = rb->width * rb->height * 3 * sizeof(uint16_t),
+                                   .out_format = JPEG_IMAGE_FORMAT_RGB888,
+                                   .out_scale = JPEG_IMAGE_SCALE_0,
+                                   .flags = {
+                                       .swap_color_bytes = 0,
+                                   }};
+  esp_jpeg_image_output_t outimg;
+
+  esp_err_t res = esp_jpeg_decode(&jpeg_cfg, &outimg);
+  if (res != ESP_OK) {
+    return false;
+  }
+
+  ESP_LOGD(TAG, "out img width=%d height=%d", outimg.width, outimg.height);
+#endif
+
   return true;
 }
 
@@ -72,6 +114,13 @@ bool LitterRobotPresenceDetector::setup_model() {
   this->tensor_arena_ = arena_allocator.allocate(MODEL_ARENA_SIZE);
   if (this->tensor_arena_ == nullptr) {
     ESP_LOGE(TAG, "Could not allocate the streaming model's tensor arena.");
+    return false;
+  }
+
+  ExternalRAMAllocator<uint8_t> input_buffer_allocator(ExternalRAMAllocator<uint8_t>::ALLOW_FAILURE);
+  this->input_buffer = input_buffer_allocator.allocate(INPUT_BUFFER_SIZE);
+  if (this->input_buffer == nullptr) {
+    ESP_LOGE(TAG, "Could not allocate input buffer.");
     return false;
   }
 
@@ -84,7 +133,7 @@ bool LitterRobotPresenceDetector::setup_model() {
     return false;
   }
 
-  static tflite::MicroMutableOpResolver<8> micro_op_resolver;
+  static tflite::MicroMutableOpResolver<9> micro_op_resolver;
   if (!this->register_preprocessor_ops(micro_op_resolver)) {
     ESP_LOGE(TAG, "Register ops failed");
     return false;
@@ -149,17 +198,6 @@ void LitterRobotPresenceDetector::loop() {
   }
   this->image_ = nullptr;
 
-#ifdef DEBUG_CAMERA_IMAGE
-  md5::MD5Digest md5{};
-  md5.init();  // reset the md5 to compute hash of the picture
-  md5.add(image->get_data_buffer(), image->get_data_length());
-  md5.calculate();
-  char *img_hex = new char[512];
-  md5.get_hex(img_hex);
-  ESP_LOGD(TAG, "image hex %s", img_hex);
-  delete[] img_hex;
-#endif
-
   if (!this->start_infer(image)) {
     ESP_LOGE(TAG, "infer failed");
   } else {
@@ -208,17 +246,16 @@ bool LitterRobotPresenceDetector::start_infer(std::shared_ptr<esphome::esp32_cam
   TfLiteTensor *input = this->interpreter->input(0);
   size_t bytes_to_copy = input->bytes;
   uint32_t prior_invoke = millis();
-  ESP_LOGD(TAG, "img width=%d height=%d len=%d", rb->width, rb->height, rb->len);
-  uint8_t *rgb_out = new uint8_t[bytes_to_copy];
-  if (!jpg2rgb565(rb->buf, rb->len, rgb_out, JPG_SCALE_NONE)) {
+  ESP_LOGD(TAG, "img width=%d height=%d len=%d bytes=%d", rb->width, rb->height, rb->len, bytes_to_copy);
+  if (!this->decode_jpg(rb)) {
     ESP_LOGE(TAG, "cant decode to rgb");
     return false;
   }
 
-  memcpy(input->data.uint8, rgb_out, bytes_to_copy);
+  memcpy(input->data.uint8, this->input_buffer, bytes_to_copy);
+  // memcpy(input->data.uint8, rb->buf, bytes_to_copy);
   TfLiteStatus invokeStatus = this->interpreter->Invoke();
   ESP_LOGD(TAG, " Inference Latency=%u ms", (millis() - prior_invoke));
-  delete rgb_out;
   return invokeStatus == kTfLiteOk;
 }
 

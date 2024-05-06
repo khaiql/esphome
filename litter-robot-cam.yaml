@@ -71,7 +71,6 @@ esp32_camera:
   resolution: 176x144
   vertical_flip: true
   agc_mode: auto
-  wb_mode: cloudy
 
 switch:
   - platform: gpio

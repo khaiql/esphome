@@ -7,9 +7,7 @@ from esphome.const import (
 )
 
 DEPENDENCIES = ["esp32_camera"]
-AUTO_LOAD = ["binary_sensor", "md5"]
-
-CONF_DEBUG_CAMERA_IMAGE = "debug_camera_image"
+AUTO_LOAD = ["binary_sensor"]
 
 litter_robot_presence_detector_ns = cg.esphome_ns.namespace("litter_robot_presence_detector")
 LitterRobotPresenceDetectorConstructor = litter_robot_presence_detector_ns.class_("LitterRobotPresenceDetector", cg.Component, binary_sensor.BinarySensor)
@@ -22,7 +20,6 @@ CONFIG_SCHEMA = (
     {
         cv.GenerateID(): cv.declare_id(LitterRobotPresenceDetectorConstructor),
         # cv.Required(CONF_SENSOR_ID): cv.use_id(sensor.Sensor)
-        cv.Optional(CONF_DEBUG_CAMERA_IMAGE, default=False): cv.boolean
     }
   )
   .extend(cv.COMPONENT_SCHEMA)
@@ -38,12 +35,16 @@ async def to_code(config):
         repo="https://github.com/espressif/esp-tflite-micro",
     )
 
+    esp32.add_idf_component(
+        name="esp_jpeg",
+        repo="https://github.com/espressif/idf-extra-components",
+        path="esp_jpeg"
+    )
+
     # inferrence could take a long time, set Watchdog timeout to 10s
     esp32.add_idf_sdkconfig_option("CONFIG_ESP_TASK_WDT_TIMEOUT_S", 20)
 
     cg.add_build_flag("-DTF_LITE_STATIC_MEMORY")
     cg.add_build_flag("-DTF_LITE_DISABLE_X86_NEON")
-    cg.add_build_flag("-DCONFIG_NN_OPTIMIZATIONS")
-
-    if config[CONF_DEBUG_CAMERA_IMAGE]:
-        cg.add_define("DEBUG_CAMERA_IMAGE", 1)
+    # cg.add_build_flag("-DESP_NN")
+    cg.add_build_flag("-DNN_OPTIMIZATIONS")
