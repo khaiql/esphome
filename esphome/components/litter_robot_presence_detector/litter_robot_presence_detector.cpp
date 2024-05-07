@@ -18,7 +18,7 @@ namespace esphome {
 namespace litter_robot_presence_detector {
 
 static const char *const TAG = "litter_robot_presence_detector";
-static const uint32_t MODEL_ARENA_SIZE = 400 * 1024;
+static const uint32_t MODEL_ARENA_SIZE = 200 * 1024;
 static const uint32_t INPUT_BUFFER_SIZE = 144 * 176 * 3 * sizeof(uint8_t);
 
 float LitterRobotPresenceDetector::get_setup_priority() const { return setup_priority::AFTER_CONNECTION; }
@@ -67,11 +67,6 @@ bool LitterRobotPresenceDetector::register_preprocessor_ops(tflite::MicroMutable
 
   if (micro_op_resolver.AddMean() != kTfLiteOk) {
     ESP_LOGE(TAG, "failed to register ops AddMean");
-    return false;
-  }
-
-  if (micro_op_resolver.AddDepthwiseConv2D() != kTfLiteOk) {
-    ESP_LOGE(TAG, "failed to register ops AddDepthwiseConv2D");
     return false;
   }
 
@@ -201,9 +196,9 @@ void LitterRobotPresenceDetector::loop() {
   if (!this->start_infer(image)) {
     ESP_LOGE(TAG, "infer failed");
   } else {
-    auto prediction = this->get_prediction_class();
-    ESP_LOGI(TAG, "predicted class %s", prediction.c_str());
-    this->publish_state(prediction == CLASSES[CAT_DETECTED_INDEX]);
+    bool detected = this->get_prediction_result();
+    ESP_LOGI(TAG, "predicted class %s", detected ? "true" : "false");
+    this->publish_state(detected);
   }
 }
 
@@ -246,33 +241,38 @@ bool LitterRobotPresenceDetector::start_infer(std::shared_ptr<esphome::esp32_cam
   TfLiteTensor *input = this->interpreter->input(0);
   size_t bytes_to_copy = input->bytes;
   uint32_t prior_invoke = millis();
-  ESP_LOGD(TAG, "img width=%d height=%d len=%d bytes=%d", rb->width, rb->height, rb->len, bytes_to_copy);
   if (!this->decode_jpg(rb)) {
     ESP_LOGE(TAG, "cant decode to rgb");
     return false;
   }
 
   memcpy(input->data.uint8, this->input_buffer, bytes_to_copy);
-  // memcpy(input->data.uint8, rb->buf, bytes_to_copy);
   TfLiteStatus invokeStatus = this->interpreter->Invoke();
   ESP_LOGD(TAG, " Inference Latency=%u ms", (millis() - prior_invoke));
   return invokeStatus == kTfLiteOk;
 }
 
-void LitterRobotPresenceDetector::update_sensor_state(bool cat_detected) {}
-
-std::string LitterRobotPresenceDetector::get_prediction_class() {
+bool LitterRobotPresenceDetector::get_prediction_result() {
   TfLiteTensor *output = this->interpreter->output(0);
 
   auto empty_score = output->data.uint8[0];
   auto cat_detected_score = output->data.uint8[1];
   ESP_LOGD(TAG, "empty score=%d cat_detected score=%d", empty_score, cat_detected_score);
 
-  if (cat_detected_score > empty_score) {
-    return CLASSES[CAT_DETECTED_INDEX];
+  bool is_detected = cat_detected_score > empty_score;
+
+  this->prediction_history[this->last_index] = is_detected ? 1 : 0;
+  this->last_index += 1;
+  if (this->last_index == PREDICTION_HISTORY_SIZE) {
+    this->last_index = 0;
   }
 
-  return CLASSES[EMPTY_INDEX];
+  uint8_t sum = 0;
+  for (int i = 0; i < PREDICTION_HISTORY_SIZE; i++) {
+    sum += this->prediction_history[i];
+  }
+  float avg = sum / static_cast<float>(PREDICTION_HISTORY_SIZE);
+  return avg >= 0.5;
 }
 }  // namespace litter_robot_presence_detector
 }  // namespace esphome

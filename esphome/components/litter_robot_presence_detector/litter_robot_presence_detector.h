@@ -20,6 +20,7 @@ namespace litter_robot_presence_detector {
 
 constexpr uint8_t CAT_DETECTED_INDEX = 1;
 constexpr uint8_t EMPTY_INDEX = 0;
+constexpr size_t PREDICTION_HISTORY_SIZE = 5;
 static std::string CLASSES[] = {"empty", "cat_detected"};
 
 class LitterRobotPresenceDetector : public Component, public binary_sensor::BinarySensor {
@@ -42,11 +43,13 @@ class LitterRobotPresenceDetector : public Component, public binary_sensor::Bina
   const tflite::Model *model{nullptr};
   tflite::MicroInterpreter *interpreter{nullptr};
 
+  uint8_t prediction_history[PREDICTION_HISTORY_SIZE] = {0};
+  int last_index{0};
+
   bool setup_model();
   bool register_preprocessor_ops(tflite::MicroMutableOpResolver<9> &micro_op_resolver);
   bool start_infer(std::shared_ptr<esphome::esp32_camera::CameraImage> image);
-  std::string get_prediction_class();
-  void update_sensor_state(bool cat_detected);
+  bool get_prediction_result();
   bool decode_jpg(camera_fb_t *rb);
 };
 }  // namespace litter_robot_presence_detector
