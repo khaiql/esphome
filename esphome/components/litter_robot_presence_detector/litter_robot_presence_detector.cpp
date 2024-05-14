@@ -259,6 +259,7 @@ bool LitterRobotPresenceDetector::get_prediction_result() {
   auto cat_detected_score = output->data.uint8[1];
   ESP_LOGD(TAG, "empty score=%d cat_detected score=%d", empty_score, cat_detected_score);
 
+#ifndef USE_EMA
   bool is_detected = cat_detected_score > empty_score;
 
   this->prediction_history[this->last_index] = is_detected ? 1 : 0;
@@ -273,6 +274,11 @@ bool LitterRobotPresenceDetector::get_prediction_result() {
   }
   float avg = sum / static_cast<float>(PREDICTION_HISTORY_SIZE);
   return avg >= 0.5;
+#else
+  double new_value = cat_detected_score > empty_score ? 1 : 0;
+  this->current_prediction = this->ema_alpha * new_value + (1 - this->ema_alpha) * this->current_prediction;
+  return this->current_prediction >= 0.5;
+#endif
 }
 }  // namespace litter_robot_presence_detector
 }  // namespace esphome

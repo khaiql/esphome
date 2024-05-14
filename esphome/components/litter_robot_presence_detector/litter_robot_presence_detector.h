@@ -15,12 +15,14 @@
 #include <tensorflow/lite/micro/micro_mutable_op_resolver.h>
 #include <string>
 
+// #define USE_EMA 1
+
 namespace esphome {
 namespace litter_robot_presence_detector {
 
 constexpr uint8_t CAT_DETECTED_INDEX = 1;
 constexpr uint8_t EMPTY_INDEX = 0;
-constexpr size_t PREDICTION_HISTORY_SIZE = 5;
+constexpr size_t PREDICTION_HISTORY_SIZE = 7;
 static std::string CLASSES[] = {"empty", "cat_detected"};
 
 class LitterRobotPresenceDetector : public Component, public binary_sensor::BinarySensor {
@@ -43,8 +45,13 @@ class LitterRobotPresenceDetector : public Component, public binary_sensor::Bina
   const tflite::Model *model{nullptr};
   tflite::MicroInterpreter *interpreter{nullptr};
 
+#ifndef USE_EMA
   uint8_t prediction_history[PREDICTION_HISTORY_SIZE] = {0};
   int last_index{0};
+#else
+  double current_prediction;
+  double ema_alpha{0.2};
+#endif
 
   bool setup_model();
   bool register_preprocessor_ops(tflite::MicroMutableOpResolver<9> &micro_op_resolver);
